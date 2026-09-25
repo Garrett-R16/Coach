@@ -1,0 +1,10 @@
+[Unit]
+Description=Coach morning report
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/coach
+ExecStart=/usr/bin/python3 -m runner.triggers morning
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/coach/runner.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

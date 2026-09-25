@@ -1,0 +1,29 @@
+[Unit]
+Description=Coach broker (Signal + health webhook; holds secrets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=coach-svc
+Group=coach-svc
+WorkingDirectory=/opt/coach
+EnvironmentFile=/etc/coach/broker.env
+EnvironmentFile=/etc/coach/infisical.env
+Environment=HOME=/var/lib/coach
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/coach/scripts/with-secrets.sh /opt/coach/venv/bin/python3 -m broker.main
+Restart=always
+RestartSec=15
+
+# hardening: no access to user homes or the rest of the system
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/coach
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Morning report fallback (normally triggered by the first health export after 05:00)
+
+[Timer]
+OnCalendar=*-*-* 08:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

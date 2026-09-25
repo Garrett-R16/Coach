@@ -1,0 +1,15 @@
+[Unit]
+Description=Coach runner (agent side, no secrets)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Projects/coach
+ExecStart=/usr/bin/python3 -m runner.main
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-%h/.config/coach/runner.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

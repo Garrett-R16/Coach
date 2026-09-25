@@ -1,0 +1,13 @@
+.env
+state/
+data/health/raw/
+data/attachments/
+__pycache__/
+*.pyc
+.env*
+*.pem
+*.key
+**/secrets/
+**/credentials/
+inbox/
+.infisical.json
