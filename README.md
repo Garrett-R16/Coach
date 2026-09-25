@@ -176,7 +176,13 @@ python3 -m runner.triggers morning --no-send --force
 HEALTH_WEBHOOK_TOKEN=... python3 scripts/fake_export.py --workout   # fake phone export
 ```
 
-## Status
+## Disclaimer
 
-A personal project, in daily use by one athlete. No warranty, no support, and the Garmin path is against
-Garmin's terms in the strict sense, like every third-party Garmin tool. Fork freely.
+This is software, not a coach. Nothing it produces is medical, physiotherapy or professional coaching advice.
+You use it at your own risk, you are responsible for how hard you train, and you should see a professional
+for any injury, illness or health concern. It can be wrong, and it does not know what it cannot see.
+
+## Status and licence
+
+A personal project, in daily use by one athlete. No warranty and no support. The Garmin path is against Garmin's
+terms in the strict sense, like every third-party Garmin tool. MIT licensed, see `LICENSE`. Fork freely.
