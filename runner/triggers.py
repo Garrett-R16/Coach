@@ -10,7 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from common import queue
-from . import coach, config, health
+from . import coach, config, health, planned
 from .util import now, read_json, setup_logging, today, write_json
 
 log = setup_logging("triggers")
@@ -43,6 +43,7 @@ def morning_prompt() -> str:
         "Missing days mean no export arrived:\n"
         f"{json.dumps(days, indent=1)}\n\n"
         f"Workout files from the last 7 days in data/workouts/: {_recent_workouts(7)}\n\n"
+        f"{planned.prompt_section(brief_days=1)}\n\n"
         "Follow the morning-report format in your instructions."
     )
 
@@ -55,6 +56,7 @@ def workout_prompt(path: Path) -> str:
         f"A workout just arrived from {src}.\n\n"
         f"File: {path.relative_to(config.DATA_ROOT)} (full samples are in the file if you need them)\n"
         f"Summary:\n{json.dumps(health.workout_summary(w), indent=1, default=str)}\n\n"
+        f"{planned.prompt_section()}\n\n"
         "Follow the post-workout format in your instructions."
     )
 
@@ -68,6 +70,7 @@ def chat_prompt(text: str, attachments: list[Path] | None = None, failed_attachm
         n = failed_attachments
         prompt += (f"\n\n{n} attachment{'s were' if n != 1 else ' was'} sent but could not be retrieved. "
                    "Tell the athlete you could not see it and ask them to resend or describe it; do not guess its contents.")
+    prompt += "\n\n" + planned.prompt_section()
     return prompt
 
 
@@ -86,6 +89,7 @@ def morning(send: bool = True, force: bool = False) -> coach.Result | None:
         log.info("morning report already sent today; skipping")
         return None
     coach.reset_session()  # a new day starts a fresh conversation
+    _refresh_planned("morning")
     r = coach.run_coach("morning", morning_prompt(), resume=False)
     if send:
         queue.send_text(r.text)
@@ -103,7 +107,18 @@ def morning_due_from_export(payload: dict) -> bool:
     return now().hour >= MORNING_EARLIEST_HOUR and not morning_sent_today()
 
 
+def _refresh_planned(trigger: str) -> None:
+    """Fresh Garmin calendar files before the prompt is built. Never blocks a coach run on failure."""
+    try:
+        r = planned.refresh()
+        log.info("planned workouts before %s: written=%s unchanged=%d removed=%s error=%s",
+                 trigger, r["written"], len(r["unchanged"]), r["removed"], r.get("error"))
+    except Exception as e:
+        log.error("planned-workout refresh before %s failed: %s", trigger, e)
+
+
 def workout(path: Path, send: bool = True) -> coach.Result:
+    _refresh_planned("workout")
     r = coach.run_coach("workout", workout_prompt(path))
     if send:
         queue.send_text(r.text)
@@ -112,12 +127,13 @@ def workout(path: Path, send: bool = True) -> coach.Result:
 
 def chat(text: str, send: bool = True, attachments: list[Path] | None = None,
          failed_attachments: int = 0) -> coach.Result:
+    _refresh_planned("chat")
     r = coach.run_coach("chat", chat_prompt(text, attachments, failed_attachments))
     if send:
         queue.send_text(r.text)
     if r.build_request:
-        if send:
-            queue.send_text(f"Starting builder: {r.build_request}")
+        # only the coach's reply reaches the phone; the spec it wrote is logged, not sent
+        log.info("coach requested a build: %s", r.build_request)
         b = coach.run_builder(r.build_request)
         if send:
             queue.send_text(b.text)

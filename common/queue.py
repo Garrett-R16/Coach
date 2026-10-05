@@ -1,9 +1,11 @@
 """File queue shared by the broker (secrets side) and the runner (agent side).
 
 Layout under COACH_QUEUE (default /var/lib/coach/queue):
-  inbox/   broker -> runner   {"kind": "message"|"health"|"control", ...}
-  outbox/  runner -> broker   {"kind": "send"|"typing", "text": ..., "to": ...}
+  inbox/   broker -> runner   {"kind": "message"|"health"|"garmin"|"planned", ...}
+  outbox/  runner -> broker   {"kind": "send"|"typing"|"refresh_planned", "text": ..., "to": ...}
   done/    processed files, pruned after a few days
+  broker.json   written by the broker at start: the outbox kinds it understands, so the
+                runner never sends a request an older deployed broker would mistake for text
 
 Files are written to a .tmp name and renamed, so a reader never sees a partial
 file. Each side only ever deletes or moves files it has finished with.
@@ -20,6 +22,7 @@ QUEUE = Path(os.environ.get("COACH_QUEUE", "/var/lib/coach/queue"))
 INBOX = QUEUE / "inbox"
 OUTBOX = QUEUE / "outbox"
 DONE = QUEUE / "done"
+BROKER_INFO = QUEUE / "broker.json"
 RETENTION_S = 3 * 24 * 3600
 
 
@@ -76,3 +79,17 @@ def prune() -> None:
 def send_text(text: str, to: str | None = None) -> Path:
     """Runner side: ask the broker to deliver a message."""
     return enqueue(OUTBOX, {"kind": "send", "text": text, "to": to})
+
+
+def announce(kinds: list[str]) -> None:
+    """Broker side, at start: record which outbox kinds this build handles."""
+    QUEUE.mkdir(parents=True, exist_ok=True)
+    tmp = BROKER_INFO.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"started_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "kinds": kinds}))
+    os.chmod(tmp, 0o660)
+    tmp.rename(BROKER_INFO)
+
+
+def broker_supports(kind: str) -> bool:
+    """Runner side: True if the running broker has announced it handles `kind`."""
+    return kind in ((load(BROKER_INFO) or {}).get("kinds") or [])

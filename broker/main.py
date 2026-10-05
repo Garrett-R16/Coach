@@ -30,6 +30,10 @@ def outbox_loop(sig: Signal) -> None:
             try:
                 if item.get("kind") == "typing":
                     sig.typing(item.get("to"))
+                elif item.get("kind") == "refresh_planned":
+                    # the runner is waiting on this; the fetch runs off-thread so Signal sends are not held up
+                    threading.Thread(target=garmin.SOURCE.fetch_planned_and_queue, args=(item.get("request"),),
+                                     daemon=True, name="garmin-planned").start()
                 else:
                     sig.send(item.get("text") or "(empty)", item.get("to"))
                 queue.finish(path)
@@ -44,6 +48,7 @@ def main() -> None:
     os.umask(0o007)
     for d in (queue.INBOX, queue.OUTBOX, queue.DONE):
         d.mkdir(parents=True, exist_ok=True)
+    queue.announce(["send", "typing", "refresh_planned"])
     sig = Signal()
     sig.start()
     threading.Thread(target=outbox_loop, args=(sig,), daemon=True, name="outbox").start()

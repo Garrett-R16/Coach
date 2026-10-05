@@ -26,11 +26,12 @@ DATA = DATA_ROOT / "data"
 HEALTH_RAW = DATA / "health" / "raw"
 DAILY = DATA / "daily"
 WORKOUTS = DATA / "workouts"
+PLANNED = DATA / "planned"  # scheduled workouts from the Garmin calendar, one JSON per workout
 ATTACHMENTS = DATA / "attachments"  # images the athlete sends in chat
 INBOX = DATA_ROOT / "inbox"
 KNOWLEDGE = DATA_ROOT / "knowledge"
 
-for _d in (HEALTH_RAW, DAILY, WORKOUTS, ATTACHMENTS, INBOX, STATE, LOG, PLAN, ATHLETE, KNOWLEDGE):
+for _d in (HEALTH_RAW, DAILY, WORKOUTS, PLANNED, ATTACHMENTS, INBOX, STATE, LOG, PLAN, ATHLETE, KNOWLEDGE):
     _d.mkdir(parents=True, exist_ok=True)
 
 

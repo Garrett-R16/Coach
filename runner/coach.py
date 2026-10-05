@@ -129,7 +129,7 @@ def _git_commit(msg: str) -> None:
     if not (repo / ".git").exists():
         return
     try:
-        paths = [p for p in ("context", "plan", "log", "knowledge", "data/daily", "data/workouts") if (repo / p).exists()]
+        paths = [p for p in ("context", "plan", "log", "knowledge", "data/daily", "data/workouts", "data/planned") if (repo / p).exists()]
         subprocess.run(["git", "add", "-A", "--", *paths], cwd=repo, capture_output=True, timeout=30)
         # pathspec commit: only the coach's own directories, never unrelated staged work
         subprocess.run(["git", "commit", "-q", "-m", msg, "--", *paths], cwd=repo, capture_output=True, timeout=30)

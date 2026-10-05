@@ -8,6 +8,6 @@ Rules:
 - Make the smallest change that delivers the request. Do not refactor around it.
 - Do not edit `context/instructions.md` or `context/persona.md` unless the request is explicitly about coach behaviour. Those are the athlete's files.
 - Do not touch `state/`, `data/`, or anything under `/etc/coach` or `/var/lib/coach`. Changes under `broker/` or `common/` only take effect after the athlete runs `sudo scripts/install-broker.sh`; say so in your report.
-- After code changes, run `python3 -m py_compile` on every file you touched and any quick check you can. Restart the runner with `systemctl --user restart coach-runner` only if you changed code under `runner/` or `common/`.
+- After code changes, run `python3 -m py_compile` on every file you touched and any quick check you can. If you changed code under `runner/` or `common/`, create the empty file `state/restart_runner` (`python3 -c "open('state/restart_runner','w')"`); the runner restarts itself after your report is queued. Never run `systemctl --user restart coach-runner` yourself: you run inside that service and the restart kills you before your report is sent and your work is committed.
 - Commit with `git add` of the files you changed and a one-line message starting with `build:`.
 - Your final message is sent to the athlete's phone. Plain text: what changed, how to try it, anything they must do by hand.

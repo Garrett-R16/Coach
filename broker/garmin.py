@@ -1,9 +1,12 @@
-"""Garmin Connect source for ride power.
+"""Garmin Connect source for ride power and planned workouts.
 
 Apple Health carries a Garmin ride's summary but not its power channel. When a
 cycling workout arrives from the phone, this module finds the matching Garmin
 activity and queues its summary, per-second streams and laps for the runner.
-A slow hourly check catches anything the phone missed.
+A slow hourly check catches anything the phone missed, and on the same cadence
+queues the calendar's scheduled workouts (club swim sets and the like) for today
+and the next two days with their full step structure (kind "planned"). The runner
+also asks for them (outbox "refresh_planned") right before every coach run.
 
 Auth: python-garminconnect with a token store under the broker's state dir.
 The password is only ever typed at the one-time interactive login
@@ -27,6 +30,7 @@ from . import config
 log = logging.getLogger("garmin")
 TOKENS = Path(config.env("GARMIN_TOKENS", str(Path(config.env("COACH_STATE", "/var/lib/coach/state")).parent / "garmin")))
 POLL_S = int(config.env("GARMIN_POLL_SECONDS", "3600"))
+PLANNED_DAYS = int(config.env("GARMIN_PLANNED_DAYS", "3"))  # today plus the next two
 SEEN_FILE = config.STATE / "garmin_seen.json"
 MATCH_WINDOW = timedelta(minutes=12)
 RETRY_EVERY_S = 300
@@ -211,7 +215,58 @@ class GarminSource:
                             self._fetch_and_queue(a)
                 except Exception as e:
                     log.error("backup poll failed: %s", e)
+                try:
+                    self.fetch_planned_and_queue()
+                except Exception as e:  # queue write failed; the fetch itself reports its own errors
+                    log.error("planned-workout poll failed: %s", e)
             time.sleep(POLL_S)
+
+    # --- scheduled (planned) workouts from the Garmin calendar ---------------
+    def planned(self, days: int = PLANNED_DAYS) -> tuple[list[str], list[dict]]:
+        """Calendar workouts for today and the next `days - 1` days, each with its full
+        step structure. Returns (dates covered, [{"listed": calendar item, "workout": detail}])."""
+        g = self.client()
+        dates = [(datetime.now().date() + timedelta(days=i)).isoformat() for i in range(days)]
+        months = sorted({(d[:4], d[5:7]) for d in dates})
+        items: list[dict] = []
+        for y, m in months:
+            cal = self._call(g.get_scheduled_workouts, int(y), int(m)) or {}
+            items += [it for it in (cal.get("calendarItems") or [])
+                      if isinstance(it, dict) and it.get("itemType") == "workout" and it.get("date") in dates]
+        out = []
+        for it in sorted(items, key=lambda it: (it.get("date") or "", it.get("id") or 0)):
+            wid = it.get("workoutId")
+            detail, err = {}, None
+            if wid:
+                try:
+                    detail = self._call(g.get_workout_by_id, wid) or {}
+                except Exception as e:
+                    err = f"{type(e).__name__}: {e}"
+                    log.warning("could not fetch workout %s (%s): %s", wid, it.get("title"), err)
+            out.append({"listed": it, "workout": detail, "error": err})
+        return dates, out
+
+    def fetch_planned_and_queue(self, request: str | None = None) -> Path:
+        """Read the calendar and hand the result to the runner. Always queues an answer: on failure
+        a "planned" item with "error" instead of "items", so the runner can say why in the prompt.
+        `request` is the runner's id for a refresh it is waiting on; it is echoed back."""
+        dates = [(datetime.now().date() + timedelta(days=i)).isoformat() for i in range(PLANNED_DAYS)]
+        item: dict = {"kind": "planned", "dates": dates, "request": request,
+                      "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds")}
+        if not configured():
+            item["error"] = "Garmin is not set up on the broker (no tokens; run scripts/garmin-login.sh)"
+        else:
+            try:
+                _, item["items"] = self.planned()
+            except Exception as e:
+                item["error"] = f"Garmin calendar read failed: {type(e).__name__}: {e}"
+                log.error(item["error"])
+        path = queue.enqueue(queue.INBOX, item)
+        if "error" in item:
+            log.warning("queued planned-workout failure for %s..%s -> %s", dates[0], dates[-1], path.name)
+        else:
+            log.info("queued %d planned workout(s) for %s..%s -> %s", len(item["items"]), dates[0], dates[-1], path.name)
+        return path
 
 
 SOURCE = GarminSource()
@@ -252,7 +307,18 @@ def _cli(argv: list[str]) -> int:
             print(f"  {a.get('startTimeLocal')}  {a.get('activityType', {}).get('typeKey')}  {a.get('activityName')}"
                   f"  avgPower={a.get('avgPower')}")
         return 0
-    print("usage: python3 -m broker.garmin login|test", file=sys.stderr)
+    if cmd == "planned":
+        dates, items = SOURCE.planned()
+        print(f"Scheduled workouts on the Garmin calendar for {dates[0]}..{dates[-1]}: {len(items)}")
+        for it in items:
+            l, w = it["listed"], it["workout"]
+            steps = sum(len(s.get("workoutSteps") or []) for s in (w.get("workoutSegments") or []))
+            print(f"  {l.get('date')}  {l.get('sportTypeKey') or (w.get('sportType') or {}).get('sportTypeKey')}"
+                  f"  {l.get('title') or w.get('workoutName')}  workoutId={l.get('workoutId')}  top-level steps={steps}")
+        if "--queue" in argv:
+            print(f"queued -> {SOURCE.fetch_planned_and_queue()}")
+        return 0
+    print("usage: python3 -m broker.garmin login|test|planned [--queue]", file=sys.stderr)
     return 2
 
 

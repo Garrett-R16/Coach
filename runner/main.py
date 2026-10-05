@@ -6,20 +6,28 @@ from __future__ import annotations
 
 import base64
 import os
+import sys
 import time
 import traceback
+from datetime import timedelta
 from pathlib import Path
 
 from common import queue
-from . import coach, config, health, triggers
-from .util import now, read_json, setup_logging
+from . import coach, config, health, planned, triggers
+from .util import now, read_json, setup_logging, today
 
 log = setup_logging("runner")
+
+# The builder runs inside this service, so `systemctl --user restart` from the builder kills the
+# builder itself before its report is sent. It touches this file instead; we restart once the
+# current item is finished and the report is in the outbox.
+RESTART_FLAG = config.STATE / "restart_runner"
 
 HELP = """Commands:
 /new - start a fresh conversation (the coach forgets today's chat, not the files)
 /morning - run the morning report now
 /workout - analyse the most recent workout file now
+/planned - fetch scheduled Garmin workouts for today and the next two days and show them
 /build <request> - ask the builder agent to add or change functionality
 /status - last health export, session, recent runs
 /help - this list
@@ -98,6 +106,12 @@ def handle_message(text: str, attachments: list[dict] | None = None) -> None:
             queue.send_text("No workout files yet.")
         else:
             triggers.workout(files[-1], send=True)
+    elif cmd == "/planned":
+        r = planned.refresh()  # asks the broker and waits for its answer (up to PLANNED_REFRESH_TIMEOUT seconds)
+        head = "Scheduled Garmin workouts" + (f" (refresh failed: {r['error']}; showing the stored copy)" if r.get("error")
+                                               else " (just fetched)")
+        lines = [planned.day_text((today() + timedelta(days=i)).isoformat()) for i in range(3)]
+        queue.send_text(head + ":\n\n" + "\n\n".join(lines))
     elif cmd == "/build":
         if not rest.strip():
             queue.send_text("Usage: /build <what you want added or changed>")
@@ -147,8 +161,20 @@ def handle(item: dict) -> None:
         handle_health(item.get("payload") or {})
     elif kind == "garmin":
         handle_garmin(item)
+    elif kind == "planned":
+        r = planned.ingest(item)
+        log.info("planned workouts %s: written=%s unchanged=%d removed=%s",
+                 item.get("dates"), r["written"], len(r["unchanged"]), r["removed"])
     else:
         log.warning("unknown inbox item kind %r", kind)
+
+
+def restart_if_asked() -> None:
+    if not RESTART_FLAG.exists():
+        return
+    RESTART_FLAG.unlink()
+    log.info("restart requested (new runner code); re-executing")
+    os.execv(sys.executable, [sys.executable, "-m", "runner.main"])  # same PID, systemd sees nothing
 
 
 def main() -> None:
@@ -170,6 +196,7 @@ def main() -> None:
                     queue.send_text(f"Error: {e}")
                 except Exception:
                     pass
+            restart_if_asked()
         try:
             flush_pending()
         except Exception as e:
