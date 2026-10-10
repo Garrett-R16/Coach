@@ -45,6 +45,8 @@ KEY = _find_env("intervals", "key", exclude=("athlete", "_id"))
 ATHLETE = _find_env("intervals", "athlete") or _find_env("intervals", "id", exclude=("key",))
 POLL_S = int(config.env("INTERVALS_POLL_SECONDS", "600"))
 PLANNED_DAYS = int(config.env("INTERVALS_PLANNED_DAYS", "3"))
+LOOKBACK_DAYS = int(config.env("INTERVALS_LOOKBACK_DAYS", "3"))
+FIRST_LOOKBACK_DAYS = int(config.env("INTERVALS_FIRST_LOOKBACK_DAYS", "7"))  # one-time backfill on the first poll
 RIDE_TYPES = set((config.env("INTERVALS_TYPES") or "Ride,VirtualRide,GravelRide,MountainBikeRide,EBikeRide,TrackRide").split(","))
 STREAMS = "time,watts,heartrate,cadence,velocity_smooth,altitude,distance"
 USER_AGENT = config.env("INTERVALS_USER_AGENT", "coach-harness/1.0 (+https://github.com/Garrett-R16/Coach)")
@@ -130,9 +132,16 @@ class Intervals:
 
     def poll_activities(self) -> int:
         n = 0
+        first = not SEEN_FILE.exists()
         seen = self._seen()
-        for a in sorted(self.recent(), key=lambda x: x.get("start_date_local") or ""):
-            if a.get("type") not in RIDE_TYPES or a.get("id") in seen:
+        acts = self.recent(FIRST_LOOKBACK_DAYS if first else LOOKBACK_DAYS)
+        rides = [a for a in acts if a.get("type") in RIDE_TYPES]
+        log.info("activities in window: %d (%d rides, %d already seen)%s", len(acts), len(rides),
+                 sum(1 for a in rides if a.get("id") in seen), " [first poll, backfill]" if first else "")
+        if first and not rides:
+            _save(SEEN_FILE, {"ids": []})
+        for a in sorted(rides, key=lambda x: x.get("start_date_local") or ""):
+            if a.get("id") in seen:
                 continue
             full = self.fetch_full(a["id"])
             path = queue.enqueue(queue.INBOX, {"kind": "intervals_activity", **full})

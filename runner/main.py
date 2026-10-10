@@ -149,6 +149,11 @@ def handle_garmin(item: dict) -> None:
 
 def handle_intervals(item: dict) -> None:
     path, created = health.ingest_intervals(item)
+    start = health._icu_start(item.get("activity") or {})
+    stale = bool(start) and (now() - start) > timedelta(hours=48)
+    if created and stale:
+        log.info("Intervals.icu backfilled %s (older than 48 h): stored, not analysed", path.name)
+        return
     if health.pop_pending(path) or created:
         log.info("Intervals.icu data for %s -> coach", path.name)
         triggers.workout(path, send=True)
