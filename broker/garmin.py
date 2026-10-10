@@ -48,8 +48,8 @@ notify = None  # set by main: callable(text) that sends a Signal message
 
 
 def _intervals_configured() -> bool:
-    return bool((config.env("INTERVALS_API_KEY") or config.env("intervals_api_key"))
-                and (config.env("INTERVALS_ATHLETE_ID") or config.env("intervals_athlete_id")))
+    from . import intervals as _i
+    return _i.configured()
 
 
 def configured() -> bool:

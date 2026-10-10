@@ -30,12 +30,24 @@ from . import config
 
 log = logging.getLogger("intervals")
 API = "https://intervals.icu/api/v1"
-KEY = config.env("INTERVALS_API_KEY") or config.env("intervals_api_key")
-ATHLETE = config.env("INTERVALS_ATHLETE_ID") or config.env("intervals_athlete_id")
+def _find_env(*must: str, exclude: tuple[str, ...] = ()) -> str | None:
+    """First environment variable whose name contains all of `must` (case-insensitive) and none of
+    `exclude`. Lets the secrets be named freely in the vault (INTERVALS_API_KEY, intervals_key, ...)."""
+    import os
+    for name, val in sorted(os.environ.items()):
+        n = name.lower()
+        if val and all(m in n for m in must) and not any(x in n for x in exclude):
+            return val
+    return None
+
+
+KEY = _find_env("intervals", "key", exclude=("athlete", "_id"))
+ATHLETE = _find_env("intervals", "athlete") or _find_env("intervals", "id", exclude=("key",))
 POLL_S = int(config.env("INTERVALS_POLL_SECONDS", "600"))
 PLANNED_DAYS = int(config.env("INTERVALS_PLANNED_DAYS", "3"))
 RIDE_TYPES = set((config.env("INTERVALS_TYPES") or "Ride,VirtualRide,GravelRide,MountainBikeRide,EBikeRide,TrackRide").split(","))
 STREAMS = "time,watts,heartrate,cadence,velocity_smooth,altitude,distance"
+USER_AGENT = config.env("INTERVALS_USER_AGENT", "coach-harness/1.0 (+https://github.com/Garrett-R16/Coach)")
 SEEN_FILE = config.STATE / "intervals_seen.json"
 notify = None
 
@@ -67,15 +79,18 @@ class Intervals:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method,
                                      headers={"Authorization": self._auth, "Content-Type": "application/json",
-                                              "Accept": "application/json"})
+                                              "Accept": "application/json", "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 raw = r.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:300]
-            if e.code in (401, 403):
+            blocked = "cloudflare" in detail.lower() or "<html" in detail.lower()
+            if e.code in (401, 403) and not blocked:
                 self._alert(f"Intervals.icu rejected the API key ({e.code}). Ride power and planned workouts from Intervals are off until it is fixed in Infisical.")
+            elif e.code == 403 and blocked:
+                self._alert("Intervals.icu's edge (Cloudflare) is refusing the broker's requests; this is a blocking rule, not the key. Check the User-Agent and try again later.")
             raise RuntimeError(f"Intervals.icu {method} {path} -> {e.code}: {detail}") from None
 
     def _get(self, path: str, **q):
