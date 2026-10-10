@@ -137,11 +137,12 @@ activity's power, cadence, heart rate and laps, and the coach waits up to ten mi
 This uses the community `garminconnect` library, pinned in `broker/requirements.txt`; Garmin changes its login
 now and then, so expect an occasional version bump.
 
-The same session also reads the Garmin Connect calendar: scheduled workouts for today and the next two days
+The same session also reads the Garmin Connect calendar: scheduled workouts for today and the next seven days
 (club swim sets, for instance) are fetched right before every coach run and hourly in between, with their full
 step structure, and stored as `data/planned/YYYY-MM-DD_<slug>.json`, normalised to a step list (yards for
-swims). Today's and tomorrow's go into every morning, workout and chat prompt so the coach can reconcile them
-with the plan; if the calendar could not be read the prompt says so. `/planned` fetches and shows them;
+swims). Today's and tomorrow's go into every morning, workout and chat prompt in full so the coach can reconcile
+them with the plan, and the rest of the week as one line per workout pointing at its file; if the calendar could
+not be read the prompt says so. `/planned` fetches and shows them;
 `scripts/garmin-test.sh planned` lists them straight from Garmin.
 
 ## Day to day

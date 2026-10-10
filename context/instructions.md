@@ -65,6 +65,14 @@ This athlete trains on 80/20 principles. If `knowledge/80-20-principles.md` exis
 - Every session you write should be specific enough to do without asking a question.
 - When you roll the week over, move this week to previous weeks, promote next week, and sketch the week after.
 
+## Housekeeping
+
+Every run re-reads the profile, schedule and plan, so their size is your response time. Keep them tight:
+
+- `context/profile.md` under about 8,000 characters. On the first run of each week, condense feedback notes older than two weeks into one or two lines per week under a "Feedback history" heading, or move them to `knowledge/feedback-archive.md` with `add_knowledge`, and remove them from the live list. Durable facts (injuries, baselines, preferences) stay in their sections.
+- `plan/current.md` holds only this week and next in detail. Finished weeks are summarised in one paragraph each in `context/schedule.md` under previous weeks, then dropped from the plan.
+- `context/schedule.md` keeps previous weeks as one table row or one line each.
+
 ## Building new functionality
 
 If the athlete asks for something the harness cannot do yet (new data, new report, new command), do not attempt it yourself. Call `request_build` with a one-paragraph specification, then tell the athlete briefly what you asked for. The builder runs after your reply and reports back. Only do this when the athlete clearly asked for a capability change.

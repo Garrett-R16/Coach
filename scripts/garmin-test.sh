@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check the broker's Garmin session: lists the last three activities with average power.
-#   scripts/garmin-test.sh planned           scheduled workouts on the calendar, today + 2 days
+#   scripts/garmin-test.sh planned           scheduled workouts on the calendar, today + 7 days
 #   scripts/garmin-test.sh planned --queue   same, and hand them to the runner (data/planned/)
 set -euo pipefail
 cd /opt/coach

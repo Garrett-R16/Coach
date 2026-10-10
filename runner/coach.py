@@ -57,16 +57,29 @@ class Result:
     raw: dict | None = None
 
 
-def _session_for_today() -> str | None:
+RESUME_WINDOW_S = int(config.env("COACH_RESUME_MINUTES", "20")) * 60
+
+
+def _session_to_resume(trigger: str) -> str | None:
+    """Resume the previous session only for a chat that follows the last run within a short
+    window, so follow-up questions keep their context. Everything else starts fresh: a resumed
+    session re-sends the whole day's transcript on every turn, which made evening replies take
+    minutes and cost ten times a fresh run. The log and profile notes carry the day's state."""
+    if trigger != "chat":
+        return None
     st = read_json(SESSION_FILE, {})
-    if st.get("date") == today().isoformat():
-        return st.get("session_id")
-    return None
+    if st.get("date") != today().isoformat():
+        return None
+    try:
+        age = now().timestamp() - float(st.get("at", 0))
+    except (TypeError, ValueError):
+        return None
+    return st.get("session_id") if age <= RESUME_WINDOW_S else None
 
 
 def _remember_session(session_id: str | None) -> None:
     if session_id:
-        write_json(SESSION_FILE, {"date": today().isoformat(), "session_id": session_id})
+        write_json(SESSION_FILE, {"date": today().isoformat(), "session_id": session_id, "at": now().timestamp()})
 
 
 def reset_session() -> None:
@@ -150,7 +163,7 @@ def run_coach(trigger: str, prompt: str, resume: bool = True) -> Result:
         for stale in (BUILD_REQUEST, REPLY_FILE):
             if stale.exists():
                 stale.unlink()
-        sid = _session_for_today() if resume else None
+        sid = _session_to_resume(trigger) if resume else None
         if sid:
             rc, out, err = _run(cmd + ["--resume", sid], full_prompt, cwd=config.DATA_ROOT)
             if rc != 0:

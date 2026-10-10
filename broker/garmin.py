@@ -5,7 +5,7 @@ cycling workout arrives from the phone, this module finds the matching Garmin
 activity and queues its summary, per-second streams and laps for the runner.
 A slow hourly check catches anything the phone missed, and on the same cadence
 queues the calendar's scheduled workouts (club swim sets and the like) for today
-and the next two days with their full step structure (kind "planned"). The runner
+and the next seven days with their full step structure (kind "planned"). The runner
 also asks for them (outbox "refresh_planned") right before every coach run.
 
 Auth: python-garminconnect with a token store under the broker's state dir.
@@ -30,7 +30,7 @@ from . import config
 log = logging.getLogger("garmin")
 TOKENS = Path(config.env("GARMIN_TOKENS", str(Path(config.env("COACH_STATE", "/var/lib/coach/state")).parent / "garmin")))
 POLL_S = int(config.env("GARMIN_POLL_SECONDS", "3600"))
-PLANNED_DAYS = int(config.env("GARMIN_PLANNED_DAYS", "3"))  # today plus the next two
+PLANNED_DAYS = int(config.env("GARMIN_PLANNED_DAYS", "8"))  # today plus the next seven
 SEEN_FILE = config.STATE / "garmin_seen.json"
 MATCH_WINDOW = timedelta(minutes=12)
 RETRY_EVERY_S = 300

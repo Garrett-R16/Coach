@@ -1,7 +1,7 @@
 """Planned (scheduled) workouts from the Garmin Connect calendar.
 
 The broker queues {"kind": "planned", "dates": [...], "items": [{"listed", "workout"}]}
-for today and the next two days, or {"kind": "planned", "dates": [...], "error": "..."}
+for today and the next seven days, or {"kind": "planned", "dates": [...], "error": "..."}
 when the calendar could not be read. Each workout is normalised to a readable step
 list and stored as data/planned/YYYY-MM-DD_<slug>.json. Swim distances are in yards,
 everything else in metres; durations in seconds; pace as text.
@@ -11,7 +11,7 @@ The runner has no Garmin access, so `refresh()` asks the broker (outbox
 on the broker side keeps the files fresh in between.
 
 CLI:  python3 -m runner.planned [YYYY-MM-DD]   render what is stored for a day (default today)
-      python3 -m runner.planned refresh        ask the broker now, wait, then render today and tomorrow
+      python3 -m runner.planned refresh        ask the broker now, wait, then render the prompt section
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from .util import now, read_json, today, write_json
 
 FETCHED_FILE = config.STATE / "planned_fetched.json"
 REFRESH_TIMEOUT_S = float(config.env("PLANNED_REFRESH_TIMEOUT", "30"))
+WINDOW_DAYS = 8  # today plus the next seven; the broker fetches the same window (GARMIN_PLANNED_DAYS)
 YD_PER_M = 1.0936133
 SWIM_WORDS = ("swim", "lap_swimming", "open_water")
 STEP_LABELS = {"warmup": "warm-up", "cooldown": "cool-down", "interval": "work", "recovery": "recovery",
@@ -357,7 +358,7 @@ def _step_text(step: dict, unit: str, indent: str = "") -> list[str]:
     return [f"{indent}{step.get('type')}: " + " ".join(bits)]
 
 
-def render(p: dict) -> str:
+def _head(p: dict) -> str:
     head = f"{p.get('date')} {p.get('sport')}: {p.get('name')}"
     extras = []
     if p.get("estimated_distance"):
@@ -368,7 +369,11 @@ def render(p: dict) -> str:
         extras.append(f"pool {p['pool_length']}")
     if extras:
         head += " (" + ", ".join(extras) + ")"
-    lines = [head]
+    return head
+
+
+def render(p: dict) -> str:
+    lines = [_head(p)]
     if p.get("description"):
         lines.append(f"  note: {p['description']}")
     for s in p.get("steps") or []:
@@ -408,26 +413,35 @@ def day_text(day: str) -> str:
     return f"unknown for {day}: the Garmin calendar has not been fetched for that day yet"
 
 
-def prompt_section(full_days: int = 2, brief_days: int = 0) -> str:
+def day_brief(day: str) -> str:
+    """A day's planned workouts as one line each (the steps stay in the file), or day_text's one explicit line."""
+    wd = datetime.fromisoformat(day).strftime("%a")
+    files = files_for(day)
+    if not files:
+        return f"{wd}: {day_text(day)}"
+    st, err = _status()
+    stale = f" (stored copy from {str(st.get('at', '?'))[:16]}; the latest calendar fetch failed)" if err else ""
+    return "\n".join(f"{wd} {_head(read_json(f, {}))} - file: data/planned/{f.name}{stale}" for f in files)
+
+
+def prompt_section(full_days: int = 2, brief_days: int = WINDOW_DAYS - 2) -> str:
     """Today's and tomorrow's planned workouts in full (the athlete asks about tomorrow's set the
-    evening before), then one line per further day when asked."""
+    evening before), then one line per workout for the rest of the fetched week."""
     t = today()
     out = ["Scheduled workouts on the athlete's Garmin Connect calendar (club sets land here before they are swum). "
            "Reconcile these with plan/current.md: if a club set is scheduled, it replaces or shapes that day's "
            "session in the sport; say what differs. A 'fetch failed' line means the calendar could not be read "
-           "just now; tell the athlete if it matters to the question."]
+           "just now; tell the athlete if it matters to the question. Today and tomorrow are shown in full; the "
+           "days after are one line per workout, and the file named on the line has the full steps: read it "
+           "before you describe or judge that session."]
     for i in range(full_days):
         d = (t + timedelta(days=i)).isoformat()
         label = "Today" if i == 0 else "Tomorrow" if i == 1 else d
         out.append(f"{label} ({d}):\n" + day_text(d))
+    if brief_days > 0:
+        out.append("The following days:")
     for i in range(full_days, full_days + brief_days):
-        d = (t + timedelta(days=i)).isoformat()
-        files = files_for(d)
-        if files:
-            names = "; ".join(f"{read_json(f, {}).get('sport')} {read_json(f, {}).get('name')}" for f in files)
-            out.append(f"{d}: {names} (detail in data/planned/)")
-        else:
-            out.append(f"{d}: " + day_text(d))
+        out.append(day_brief((t + timedelta(days=i)).isoformat()))
     return "\n".join(out)
 
 
@@ -435,7 +449,7 @@ def main(argv: list[str]) -> int:
     if argv and argv[0] == "refresh":
         r = refresh()
         print(f"refresh: {r}\n")
-        print(prompt_section(brief_days=1))
+        print(prompt_section())
         return 0 if not r.get("error") else 1
     day = argv[0] if argv else today().isoformat()
     print(day_text(day))

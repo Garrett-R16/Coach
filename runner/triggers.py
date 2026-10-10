@@ -43,7 +43,7 @@ def morning_prompt() -> str:
         "Missing days mean no export arrived:\n"
         f"{json.dumps(days, indent=1)}\n\n"
         f"Workout files from the last 7 days in data/workouts/: {_recent_workouts(7)}\n\n"
-        f"{planned.prompt_section(brief_days=1)}\n\n"
+        f"{planned.prompt_section()}\n\n"
         "Follow the morning-report format in your instructions."
     )
 
@@ -107,10 +107,21 @@ def morning_due_from_export(payload: dict) -> bool:
     return now().hour >= MORNING_EARLIEST_HOUR and not morning_sent_today()
 
 
+PLANNED_FRESH_S = int(config.env("PLANNED_FRESH_MINUTES", "60")) * 60
+
+
 def _refresh_planned(trigger: str) -> None:
-    """Fresh Garmin calendar files before the prompt is built. Never blocks a coach run on failure."""
+    """Fresh Garmin calendar files before the prompt is built. Never blocks a coach run on failure.
+    The morning report always refreshes; chats and workout analyses reuse a copy fetched within
+    the last hour (the broker also polls hourly), so a reply is not held up by a Garmin round trip."""
     try:
-        r = planned.refresh()
+        if trigger != "morning":
+            st = read_json(planned.FETCHED_FILE, {})
+            last = planned._ts(st.get("at"))
+            if last and (now() - last).total_seconds() < PLANNED_FRESH_S:
+                log.info("planned workouts before %s: stored copy from %s is recent, not refreshing", trigger, st.get("at"))
+                return
+        r = planned.refresh(timeout_s=12 if trigger == "chat" else planned.REFRESH_TIMEOUT_S)
         log.info("planned workouts before %s: written=%s unchanged=%d removed=%s error=%s",
                  trigger, r["written"], len(r["unchanged"]), r["removed"], r.get("error"))
     except Exception as e:

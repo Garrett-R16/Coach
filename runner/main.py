@@ -27,7 +27,7 @@ HELP = """Commands:
 /new - start a fresh conversation (the coach forgets today's chat, not the files)
 /morning - run the morning report now
 /workout - analyse the most recent workout file now
-/planned - fetch scheduled Garmin workouts for today and the next two days and show them
+/planned - fetch scheduled Garmin workouts for today and the next 7 days and show them
 /build <request> - ask the builder agent to add or change functionality
 /status - last health export, session, recent runs
 /help - this list
@@ -110,7 +110,8 @@ def handle_message(text: str, attachments: list[dict] | None = None) -> None:
         r = planned.refresh()  # asks the broker and waits for its answer (up to PLANNED_REFRESH_TIMEOUT seconds)
         head = "Scheduled Garmin workouts" + (f" (refresh failed: {r['error']}; showing the stored copy)" if r.get("error")
                                                else " (just fetched)")
-        lines = [planned.day_text((today() + timedelta(days=i)).isoformat()) for i in range(3)]
+        days = [(today() + timedelta(days=i)).isoformat() for i in range(planned.WINDOW_DAYS)]
+        lines = [planned.day_text(d) for d in days[:3]] + ["\n".join(planned.day_brief(d) for d in days[3:])]
         queue.send_text(head + ":\n\n" + "\n\n".join(lines))
     elif cmd == "/build":
         if not rest.strip():
