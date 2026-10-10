@@ -104,6 +104,43 @@ def reply(text: str) -> str:
     return "queued for delivery; you are done, stop here"
 
 
+SCHEDULE_TIMEOUT_S = 25
+
+
+def schedule_workout(date: str, sport: str, name: str, description: str, indoor: bool = False) -> str:
+    """Put a structured workout on the athlete's Intervals.icu calendar; it then appears on the Garmin
+    device and in MyWhoosh. `description` uses Intervals.icu workout text, one step per line, e.g.
+    "Warmup\n- 10m 55-65%\n\n3x\n- 5m 95-105%\n- 3m 50%\n\nCooldown\n- 10m 50%" (% of FTP for rides;
+    "Z2 HR", "85% LTHR" or "4:30/km Pace" for runs; "mtr" for metres, "m" is minutes)."""
+    import time as _time, uuid as _uuid, sys as _sys
+    _sys.path.insert(0, str(config.ROOT))
+    from common import queue as _q
+    datetime.strptime(date, "%Y-%m-%d")
+    _check(name, "name"); _check(description, "description")
+    if not _q.broker_supports("schedule_workout"):
+        return "error: the broker cannot schedule workouts (Intervals.icu not configured or broker not redeployed)"
+    rid = _uuid.uuid4().hex[:8]
+    _q.enqueue(_q.OUTBOX, {"kind": "schedule_workout", "request": rid, "date": date, "sport": sport,
+                           "name": name.strip(), "description": description.strip(), "indoor": bool(indoor)})
+    deadline = _time.monotonic() + SCHEDULE_TIMEOUT_S
+    while _time.monotonic() < deadline:
+        for p in _q.pending(_q.INBOX):
+            if "_scheduled_" not in p.name:
+                continue
+            item = _q.load(p)
+            if item and item.get("request") == rid:
+                _q.finish(p)
+                if item.get("ok"):
+                    ev = item.get("event") or {}
+                    load = ev.get("icu_training_load")
+                    return (f"scheduled '{ev.get('name')}' on {date} as {ev.get('type')} (Intervals.icu event {ev.get('id')}"
+                            + (f", est. load {load}" if load else "") + "). It syncs to the Garmin and MyWhoosh calendars within minutes."
+                            + (f" Push errors: {ev['push_errors']}" if ev.get("push_errors") else ""))
+                return f"error: {item.get('error')}"
+        _time.sleep(0.5)
+    return "error: no answer from the broker within 25 s; the workout may still appear, check Intervals.icu"
+
+
 def request_build(spec: str) -> str:
     """Ask the builder agent to add or change harness functionality after this run."""
     _check(spec, "spec")
@@ -136,6 +173,14 @@ TOOLS = {
     "reply": (reply, {
         "type": "object", "properties": {"text": {"type": "string", "description": "The complete message for the athlete. Plain text for a phone."}},
         "required": ["text"], "additionalProperties": False}),
+    "schedule_workout": (schedule_workout, {
+        "type": "object", "properties": {
+            "date": {"type": "string", "description": "YYYY-MM-DD"},
+            "sport": {"type": "string", "enum": ["Ride", "VirtualRide", "Run", "Swim", "WeightTraining", "Workout"]},
+            "name": {"type": "string", "description": "Short title shown on the device, e.g. 'Foundation ride CF9'."},
+            "description": {"type": "string", "description": "Intervals.icu workout text: steps as '- <duration> <target>' lines, repeats as 'Nx' lines. See the function description."},
+            "indoor": {"type": "boolean", "description": "True for a trainer session (MyWhoosh)."}},
+        "required": ["date", "sport", "name", "description"], "additionalProperties": False}),
     "request_build": (request_build, {
         "type": "object", "properties": {"spec": {"type": "string", "description": "One paragraph specification for the builder agent."}},
         "required": ["spec"], "additionalProperties": False}),

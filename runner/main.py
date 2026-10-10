@@ -147,6 +147,25 @@ def handle_garmin(item: dict) -> None:
         log.info("Garmin data merged into %s (already analysed, no re-run)", path.name)
 
 
+def handle_intervals(item: dict) -> None:
+    path, created = health.ingest_intervals(item)
+    if health.pop_pending(path) or created:
+        log.info("Intervals.icu data for %s -> coach", path.name)
+        triggers.workout(path, send=True)
+    else:
+        log.info("Intervals.icu data merged into %s (already analysed, no re-run)", path.name)
+
+
+WELLNESS_FILE = config.DATA / "intervals" / "wellness.json"
+
+
+def handle_wellness(item: dict) -> None:
+    WELLNESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    from .util import write_json
+    write_json(WELLNESS_FILE, {"fetched_at": item.get("fetched_at"), "records": item.get("records") or []})
+    log.info("wellness: %d day(s) stored", len(item.get("records") or []))
+
+
 def flush_pending() -> None:
     for path in health.expired_pending():
         if path.exists():
@@ -162,6 +181,17 @@ def handle(item: dict) -> None:
         handle_health(item.get("payload") or {})
     elif kind == "garmin":
         handle_garmin(item)
+    elif kind == "intervals_activity":
+        handle_intervals(item)
+    elif kind == "planned_intervals":
+        r = planned.ingest_intervals(item)
+        log.info("Intervals planned workouts %s: written=%s unchanged=%d removed=%s",
+                 item.get("dates"), r["written"], len(r["unchanged"]), r["removed"])
+    elif kind == "wellness":
+        handle_wellness(item)
+    elif kind == "scheduled":
+        # normally consumed by the tool server while the coach waits; a late one is just logged
+        log.info("late schedule answer (request %s): ok=%s %s", item.get("request"), item.get("ok"), item.get("error") or "")
     elif kind == "planned":
         r = planned.ingest(item)
         log.info("planned workouts %s: written=%s unchanged=%d removed=%s",

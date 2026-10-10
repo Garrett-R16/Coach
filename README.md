@@ -15,7 +15,8 @@ coach-svc (system user, holds the secrets)        your user (holds no secrets)
 broker/  deployed copy in /opt/coach              runner/  this repo, plus <COACH_DATA>, your private data repo
   signal-cli  <-> Signal                            watches the queue, runs `claude -p`, writes replies
   health webhook on :8787                           normalises health exports and workouts
-  Garmin Connect fetch (ride power)                 morning report, post-workout analysis, chat
+  Intervals.icu (rides, power, planned, fitness)    morning report, post-workout analysis, chat
+  Garmin Connect calendar (club workouts)
   Infisical machine identity
         |  writes   /var/lib/coach/queue/inbox            ^ reads
         +---------- /var/lib/coach/queue/outbox  <--------+ writes
@@ -39,7 +40,7 @@ broker/  deployed copy in /opt/coach              runner/  this repo, plus <COAC
   subscription through `claude -p`; no API key.
 - A phone number for the coach's Signal account (a Google Voice number works) and Signal on your phone.
 - An iPhone with Apple Health and the [Health Auto Export](https://www.healthyapps.dev/) app.
-- Optional: a Garmin Connect account for ride power, an [Infisical](https://infisical.com) project for secrets,
+- Optional: an [Intervals.icu](https://intervals.icu) account for ride power and planned workouts, an [Infisical](https://infisical.com) project for secrets,
   and [Tailscale](https://tailscale.com) so your phone can reach the webhook without opening a port.
 
 ## Setup
@@ -123,27 +124,37 @@ In Health Auto Export, create a REST API automation:
 The morning report goes out when the day's first export arrives after 05:00, which is normally minutes after
 you unlock the phone. A timer at 08:30 is the fallback; `/morning` forces a resend.
 
-### 8. Ride power from Garmin (optional)
+### 8. Rides, power and planned workouts via Intervals.icu (recommended)
 
-Apple Health carries a Garmin ride's summary but not its power. After the broker is installed:
+Apple Health carries a Garmin ride's summary but not its power. [Intervals.icu](https://intervals.icu) is free,
+has a documented API, receives rides from Garmin Connect and MyWhoosh, and pushes planned workouts to the Garmin
+device and MyWhoosh. Create an account, connect Garmin (tick "upload planned workouts") and MyWhoosh in its
+settings, create an API key under Settings, Developer, and store it with your athlete id (the `i` plus digits in
+your profile URL):
+
+```
+infisical secrets set --env=dev INTERVALS_API_KEY=... INTERVALS_ATHLETE_ID=i...
+sudo scripts/install-broker.sh
+```
+
+The broker then polls for new rides every ten minutes and queues them with streams and intervals; the coach waits
+up to ten minutes for a ride's power before analysing it. It also reads the Intervals.icu calendar, fetches
+fitness/fatigue daily, and lets the coach schedule structured workouts (`schedule_workout`) that appear on your
+Garmin and in MyWhoosh.
+
+### 9. Garmin Connect calendar (optional)
+
+Workouts a club or coach schedules onto your Garmin calendar cannot be read through Intervals.icu; Garmin does not
+allow it. The broker can read them directly with the community `garminconnect` library (pinned in
+`broker/requirements.txt`). After the broker is installed:
 
 ```
 scripts/garmin-login.sh     # asks for email, password and MFA once; keeps only tokens under /var/lib/coach/garmin
-scripts/garmin-test.sh      # lists your last three activities to confirm
+scripts/garmin-test.sh      # lists your last three activities; `scripts/garmin-test.sh planned` shows the calendar
 ```
 
-The password is never stored. When a ride arrives from the phone the broker fetches the matching Garmin
-activity's power, cadence, heart rate and laps, and the coach waits up to ten minutes for it before analysing.
-This uses the community `garminconnect` library, pinned in `broker/requirements.txt`; Garmin changes its login
-now and then, so expect an occasional version bump.
-
-The same session also reads the Garmin Connect calendar: scheduled workouts for today and the next seven days
-(club swim sets, for instance) are fetched right before every coach run and hourly in between, with their full
-step structure, and stored as `data/planned/YYYY-MM-DD_<slug>.json`, normalised to a step list (yards for
-swims). Today's and tomorrow's go into every morning, workout and chat prompt in full so the coach can reconcile
-them with the plan, and the rest of the week as one line per workout pointing at its file; if the calendar could
-not be read the prompt says so. `/planned` fetches and shows them;
-`scripts/garmin-test.sh planned` lists them straight from Garmin.
+The password is never stored. When Intervals.icu is configured, this path is used for the calendar only; without
+it, it also fetches ride power. Garmin changes its login now and then, so expect an occasional version bump.
 
 ## Day to day
 

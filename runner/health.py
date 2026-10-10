@@ -245,8 +245,8 @@ def workout_summary(w: dict, budget: int = 12000) -> dict:
     out: dict = {}
     lists: dict[str, list] = {}
     for k, v in w.items():
-        if k == "garmin" and isinstance(v, dict):
-            out["garmin"] = garmin_summary(v)
+        if k in ("garmin", "intervals") and isinstance(v, dict):
+            out[k] = garmin_summary(v)
         elif isinstance(v, list):
             lists[k] = v
         elif k == "metadata" and not v:
@@ -564,3 +564,76 @@ def expired_pending() -> list[Path]:
             st.pop(str(p), None)
         write_json(PENDING_FILE, st)
     return due
+
+
+# --- Intervals.icu ----------------------------------------------------------
+
+def _icu_start(a: dict) -> datetime | None:
+    s = a.get("start_date") or a.get("start_date_local")
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:  # start_date_local has no offset; treat as the box's local time
+        dt = dt.replace(tzinfo=now().tzinfo)
+    return dt
+
+
+def normalise_intervals(item: dict) -> dict:
+    a = item.get("activity") or {}
+    st = item.get("streams") or {}
+    laps = []
+    for i, iv in enumerate(item.get("intervals") or [], 1):
+        if not isinstance(iv, dict):
+            continue
+        laps.append({k: v for k, v in {
+            "lapIndex": i, "label": iv.get("label"), "duration": iv.get("moving_time"), "distance": iv.get("distance"),
+            "averagePower": iv.get("average_watts"), "normalizedPower": iv.get("weighted_average_watts"),
+            "averageHR": iv.get("average_heartrate"), "averageBikeCadence": iv.get("average_cadence"),
+            "intensity": iv.get("intensity"), "zone": iv.get("zone"), "type": iv.get("type")}.items() if v is not None})
+    g = {
+        "activityId": a.get("id"), "name": a.get("name"), "type": a.get("type"),
+        "source": a.get("source") or a.get("device_name") or a.get("oauth_client_name"),
+        "trainer": a.get("trainer"),
+        "startTimeGMT": (a.get("start_date") or "").replace("T", " ").rstrip("Z")[:19] or None,
+        "startTimeLocal": (a.get("start_date_local") or "").replace("T", " ")[:19] or None,
+        "duration_s": a.get("moving_time"), "elapsed_s": a.get("elapsed_time"), "distance_m": a.get("distance"),
+        "avg_power": a.get("icu_average_watts"), "norm_power": a.get("icu_weighted_avg_watts"),
+        "avg_cadence": a.get("average_cadence"), "avg_hr": a.get("average_heartrate"), "max_hr": a.get("max_heartrate"),
+        "elevation_gain_m": a.get("total_elevation_gain"), "avg_speed_mps": a.get("average_speed"),
+        "training_load": a.get("icu_training_load"), "intensity_factor": a.get("icu_intensity"),
+        "ftp_used": a.get("icu_ftp"), "eftp": a.get("icu_pm_ftp") or a.get("icu_rolling_ftp"),
+        "coasting_s": a.get("coasting_time"), "power_zone_times_s": a.get("icu_zone_times"),
+        "hr_zone_times_s": a.get("icu_hr_zone_times"), "description": a.get("description"),
+        "laps": laps,
+        "streams": {k: v for k, v in {
+            "time": st.get("time"), "power": st.get("watts"), "hr": st.get("heartrate"), "cadence": st.get("cadence"),
+            "speed": st.get("velocity_smooth"), "elevation": st.get("altitude"), "distance": st.get("distance")}.items() if v},
+    }
+    pw = g["streams"].get("power")
+    if pw:
+        vals = [x for x in pw if isinstance(x, (int, float))]
+        if vals:
+            g["max_power"] = max(vals)
+    return {k: v for k, v in g.items() if v not in (None, [], {}, "")}
+
+
+def ingest_intervals(item: dict) -> tuple[Path, bool]:
+    """Merge an Intervals.icu ride into the matching Apple Health workout file, or create one."""
+    g = normalise_intervals(item)
+    start = _icu_start(item.get("activity") or {}) or now()
+    path = find_workout_near(start)
+    if path:
+        w = read_json(path, {})
+        w["intervals"] = g
+        write_json(path, w)
+        log.info("merged Intervals.icu %s into %s", g.get("activityId"), path.name)
+        return path, False
+    local = start.astimezone(now().tzinfo)
+    path = config.WORKOUTS / f"{local.strftime('%Y-%m-%d_%H%M')}_icu-{_slug(g.get('name') or g.get('type'))}.json"
+    write_json(path, {"name": g.get("name"), "start": local.strftime("%Y-%m-%d %H:%M:%S %z"),
+                      "source": "intervals", "intervals": g})
+    log.info("created %s from Intervals.icu %s", path.name, g.get("activityId"))
+    return path, True

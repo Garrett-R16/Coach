@@ -32,6 +32,15 @@ def _recent_workouts(days: int) -> list[str]:
     return sorted(p.name for p in config.WORKOUTS.glob("*.json") if p.name[:10] >= cutoff)
 
 
+def _wellness_section() -> str:
+    w = read_json(config.DATA / "intervals" / "wellness.json", None)
+    if not w or not w.get("records"):
+        return ""
+    recs = w["records"][-7:]
+    return ("Fitness from Intervals.icu (ctl = fitness, atl = fatigue, form = ctl - atl; rampRate = weekly ctl change), "
+            f"fetched {str(w.get('fetched_at', ''))[:16]}:\n{json.dumps(recs)}\n\n")
+
+
 def morning_prompt() -> str:
     days = _recent_days(config.MORNING_LOOKBACK_DAYS)
     yesterday = (today() - timedelta(days=1)).isoformat()
@@ -43,6 +52,7 @@ def morning_prompt() -> str:
         "Missing days mean no export arrived:\n"
         f"{json.dumps(days, indent=1)}\n\n"
         f"Workout files from the last 7 days in data/workouts/: {_recent_workouts(7)}\n\n"
+        f"{_wellness_section()}"
         f"{planned.prompt_section()}\n\n"
         "Follow the morning-report format in your instructions."
     )
@@ -50,8 +60,10 @@ def morning_prompt() -> str:
 
 def workout_prompt(path: Path) -> str:
     w = read_json(path, {})
-    src = "Garmin (with power)" if w.get("garmin") and w.get("source") == "garmin" else \
-          "Apple Health plus Garmin power data" if w.get("garmin") else "Apple Health"
+    power = "intervals" if w.get("intervals") else "garmin" if w.get("garmin") else None
+    label = {"intervals": "Intervals.icu (Garmin or MyWhoosh ride, with power)", "garmin": "Garmin (with power)"}.get(power)
+    src = label if w.get("source") in ("garmin", "intervals") else \
+          f"Apple Health plus power data from {label.split(' (')[0]}" if power else "Apple Health"
     return (
         f"A workout just arrived from {src}.\n\n"
         f"File: {path.relative_to(config.DATA_ROOT)} (full samples are in the file if you need them)\n"

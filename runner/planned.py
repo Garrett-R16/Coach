@@ -280,6 +280,107 @@ def ingest(item: dict) -> dict:
     return {"written": written, "unchanged": same, "removed": removed}
 
 
+# --- Intervals.icu planned workouts (events with workout_doc) -------------------
+
+def _icu_target(step: dict) -> str | None:
+    bits = []
+    pw = step.get("power")
+    if isinstance(pw, dict):
+        u = (pw.get("units") or "").replace("%ftp", "% FTP").replace("w", " W") if pw.get("units") else ""
+        if pw.get("start") is not None and pw.get("end") is not None:
+            bits.append(f"ramp {pw['start']:g}-{pw['end']:g}{u}")
+        elif pw.get("value") is not None:
+            bits.append(f"{pw['value']:g}{u}")
+        if pw.get("watts") is not None:
+            bits.append(f"({pw['watts']:g} W)")
+    hr = step.get("hr")
+    if isinstance(hr, dict) and hr.get("value") is not None:
+        bits.append(f"HR {hr['value']:g}{hr.get('units', '')}")
+    pace = step.get("pace")
+    if isinstance(pace, dict) and pace.get("value") is not None:
+        bits.append(f"pace {pace['value']:g}{pace.get('units', '')}")
+    cad = step.get("cadence")
+    if isinstance(cad, dict) and cad.get("value") is not None:
+        bits.append(f"{cad['value']:g} rpm")
+    return " ".join(bits) or None
+
+
+def _icu_steps(raw: list) -> list[dict]:
+    out = []
+    for st in raw or []:
+        if not isinstance(st, dict):
+            continue
+        if st.get("reps") and st.get("steps"):
+            out.append({"type": "repeat", "reps": int(st["reps"]), "steps": _icu_steps(st["steps"])})
+            continue
+        kind = "warm-up" if st.get("warmup") else "cool-down" if st.get("cooldown") else "rest" if st.get("rest") or (
+            isinstance(st.get("power"), dict) and (st["power"].get("value") or 100) <= 55 and not st.get("text")) else "work"
+        step: dict = {"type": kind}
+        if st.get("duration") is not None:
+            step["duration_s"] = round(float(st["duration"]))
+        if st.get("distance") is not None:
+            step["distance_m"] = round(float(st["distance"]))
+        tgt = _icu_target(st)
+        if tgt:
+            step["target"] = tgt
+        if st.get("text"):
+            step["note"] = str(st["text"])[:120]
+        if st.get("freeride") or st.get("free"):
+            step["note"] = (step.get("note", "") + " free ride").strip()
+        out.append(step)
+    return out
+
+
+def normalise_icu_event(e: dict, fetched_at: str | None) -> dict:
+    doc = e.get("workout_doc") or {}
+    out = {
+        "date": (e.get("start_date_local") or "")[:10],
+        "name": e.get("name"),
+        "sport": (e.get("type") or "unknown").lower(),
+        "source": "intervals",
+        "event_id": e.get("id"),
+        "external_id": e.get("external_id"),
+        "description": (doc.get("description") or e.get("description") or "")[:600] or None,
+        "estimated_duration_s": e.get("moving_time") or doc.get("duration"),
+        "training_load": e.get("icu_training_load"),
+        "intensity": e.get("icu_intensity"),
+        "indoor": e.get("indoor"),
+        "distance_unit": "m",
+        "steps": _icu_steps(doc.get("steps") or []),
+        "fetched_at": fetched_at,
+    }
+    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+
+
+def ingest_intervals(item: dict) -> dict:
+    """Write Intervals.icu planned workouts to data/planned/<date>_icu-<slug>.json and drop stale ones."""
+    dates = item.get("dates") or []
+    stamp = item.get("fetched_at") or now().isoformat(timespec="seconds")
+    if item.get("error"):
+        return {"written": [], "unchanged": [], "removed": [], "error": str(item["error"])}
+    keep: set[Path] = set(); written, same = [], []
+    for e in item.get("items") or []:
+        p = normalise_icu_event(e, stamp)
+        if not p.get("date"):
+            continue
+        path = config.PLANNED / f"{p['date']}_icu-{_slug(p.get('name'))}.json"
+        prev = read_json(path, None)
+        if prev is not None:
+            p["fetched_at"] = prev.get("fetched_at")
+        if prev == p:
+            same.append(path.name)
+        else:
+            p["fetched_at"] = stamp
+            write_json(path, p)
+            written.append(path.name)
+        keep.add(path)
+    removed = []
+    for path in config.PLANNED.glob("*_icu-*.json"):
+        if path.name[:10] in dates and path not in keep:
+            path.unlink(); removed.append(path.name)
+    return {"written": written, "unchanged": same, "removed": removed}
+
+
 def _ts(s: str | None) -> datetime | None:
     try:
         return datetime.fromisoformat(s) if s else None
@@ -327,7 +428,14 @@ def refresh(timeout_s: float = REFRESH_TIMEOUT_S) -> dict:
 
 
 def files_for(day: str) -> list[Path]:
-    return sorted(config.PLANNED.glob(f"{day}_*.json"))
+    files = sorted(config.PLANNED.glob(f"{day}_*.json"))
+    icu_names = {_slug(read_json(f, {}).get("name")) for f in files if "_icu-" in f.name}
+    out = []
+    for f in files:
+        if "_icu-" not in f.name and _slug(read_json(f, {}).get("name")) in icu_names:
+            continue  # Garmin's copy of a workout Intervals.icu pushed there
+        out.append(f)
+    return out
 
 
 def _step_text(step: dict, unit: str, indent: str = "") -> list[str]:
@@ -380,7 +488,7 @@ def render(p: dict) -> str:
         lines += _step_text(s, p.get("distance_unit", "m"), "  ")
     if not p.get("steps"):
         lines.append(f"  (step detail could not be fetched from Garmin: {p['detail_error']})" if p.get("detail_error")
-                     else "  (no step detail on Garmin)")
+                     else "  (no step detail)")
     return "\n".join(lines)
 
 
@@ -409,7 +517,7 @@ def day_text(day: str) -> str:
                 else "")
         return f"fetch failed for {day}: {err.get('error')} (at {str(err.get('at', '?'))[11:16]}{tail})"
     if day in (st.get("dates") or []):
-        return f"none on the Garmin calendar for {day} (checked {str(st.get('at', '?'))[:16]})"
+        return f"none scheduled for {day} on Garmin or Intervals.icu (checked {str(st.get('at', '?'))[:16]})"
     return f"unknown for {day}: the Garmin calendar has not been fetched for that day yet"
 
 

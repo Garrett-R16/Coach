@@ -47,6 +47,11 @@ except Exception:  # library not installed: feature off, broker still runs
 notify = None  # set by main: callable(text) that sends a Signal message
 
 
+def _intervals_configured() -> bool:
+    return bool((config.env("INTERVALS_API_KEY") or config.env("intervals_api_key"))
+                and (config.env("INTERVALS_ATHLETE_ID") or config.env("intervals_athlete_id")))
+
+
 def configured() -> bool:
     return AVAILABLE and TOKENS.exists() and any(TOKENS.iterdir())
 
@@ -164,7 +169,10 @@ class GarminSource:
         self._work.put((start, 0))
 
     def request_for_payload(self, payload: dict) -> int:
-        """Scan a Health Auto Export payload for cycling workouts and request each."""
+        """Scan a Health Auto Export payload for cycling workouts and request each.
+        Does nothing when Intervals.icu is configured: rides then arrive from there with power."""
+        if _intervals_configured():
+            return 0
         data = payload.get("data", payload)
         n = 0
         for w in data.get("workouts", []) or []:
@@ -207,7 +215,7 @@ class GarminSource:
     def backup_poll(self) -> None:
         time.sleep(120)
         while True:
-            if configured():
+            if configured() and not _intervals_configured():
                 try:
                     seen = self._seen()
                     for a in self._recent():

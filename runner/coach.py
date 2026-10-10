@@ -27,7 +27,7 @@ TIMEOUT_S = 20 * 60
 
 COACH_TOOLS = ["Read", "Glob", "Grep"]  # no Write, no Edit, no Bash: writes go through the tool server
 _COACH_DIRS = ["context", "plan", "log", "knowledge", "data", "inbox"]
-COACH_MCP_TOOLS = ["reply", "append_log", "note_feedback", "write_plan", "update_context", "add_knowledge", "request_build"]
+COACH_MCP_TOOLS = ["reply", "append_log", "note_feedback", "write_plan", "update_context", "add_knowledge", "schedule_workout", "request_build"]
 COACH_ALLOWED = (
     ["Glob", "Grep", "Read(README.md)", "Read(CLAUDE.md)"]
     + [f"Read({d}/**)" for d in _COACH_DIRS]
