@@ -102,7 +102,13 @@ again; it installs and starts `coach-broker.service`. Re-run it after any change
 
 ```
 scripts/install-runner.sh
+scripts/runner-token.sh
 ```
+
+The second script gives the coach runs their own long-lived Claude login (`claude setup-token`, stored in
+`~/.config/coach/runner.env`, mode 600). Without it the runs borrow your interactive session's token, which
+rotates on refresh and eventually fails with "OAuth session expired" when both are in use. Re-run it if the
+coach ever reports an expired login.
 
 Installs `coach-runner.service` and the morning fallback timer as user units and enables linger so they survive
 logout. Restart with `systemctl --user restart coach-runner` after pulling code changes.
