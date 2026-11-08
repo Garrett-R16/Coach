@@ -93,7 +93,55 @@ def _base_cmd(system_prompt_file: Path, model: str | None) -> list[str]:
            "--append-system-prompt", system_prompt_file.read_text()]
     if model:
         cmd += ["--model", model]
+    fallbacks = [m for m in config.COACH_FALLBACK_MODELS if m != model]
+    if fallbacks:
+        # Claude Code's own fallback covers overload and unavailability within a run
+        cmd += ["--fallback-model", ",".join(fallbacks)]
     return cmd
+
+
+_LIMIT_WORDS = ("reached your", "usage limit", "limit reached", "rate limit", "out of usage", "overloaded",
+                "not available", "credits")
+
+
+def _is_capacity_error(rc: int, data: dict, err: str) -> bool:
+    """A failure that a different model would avoid: usage limit, rate limit, overload."""
+    if rc == 0 and not data.get("is_error"):
+        return False
+    if data.get("api_error_status") in (429, 529, 503):
+        return True
+    text = f"{data.get('result') or ''} {err or ''}".lower()
+    return any(w in text for w in _LIMIT_WORDS)
+
+
+def _with_model(cmd: list[str], model: str) -> list[str]:
+    """Same command on a different model, with no further fallback list."""
+    out, skip = [], 0
+    for i, a in enumerate(cmd):
+        if skip:
+            skip -= 1
+            continue
+        if a in ("--model", "--fallback-model"):
+            skip = 1
+            continue
+        out.append(a)
+    return out + ["--model", model]
+
+
+def _run_with_fallback(cmd: list[str], prompt: str, cwd: Path | None, primary: str | None) -> tuple[int, str, str, str | None]:
+    """Run; on a capacity error (e.g. the Fable limit) retry once on each fallback model in turn.
+    Returns (rc, stdout, stderr, model used; None means the account's default)."""
+    rc, out, err = _run(cmd, prompt, cwd=cwd)
+    used = primary
+    for m in [m for m in config.COACH_FALLBACK_MODELS if m != primary]:
+        data = _parse(out)
+        if not _is_capacity_error(rc, data, err):
+            break
+        log.warning("model %s hit a capacity limit (%s); retrying on %s", used or "default",
+                    str(data.get("result") or err)[:120].replace("\n", " "), m)
+        rc, out, err = _run(_with_model(cmd, m), prompt, cwd=cwd)
+        used = m
+    return rc, out, err, used
 
 
 def _run(cmd: list[str], prompt: str, cwd: Path | None = None) -> tuple[int, str, str]:
@@ -132,7 +180,7 @@ def _record(kind: str, trigger: str, data: dict, rc: int) -> None:
             "at": now().isoformat(timespec="seconds"), "kind": kind, "trigger": trigger, "rc": rc,
             "session_id": data.get("session_id"), "cost_usd": data.get("total_cost_usd"),
             "turns": data.get("num_turns"), "duration_ms": data.get("duration_ms"),
-            "is_error": data.get("is_error"),
+            "is_error": data.get("is_error"), "model": data.get("model_used"),
         }) + "\n")
 
 
@@ -164,15 +212,17 @@ def run_coach(trigger: str, prompt: str, resume: bool = True) -> Result:
             if stale.exists():
                 stale.unlink()
         sid = _session_to_resume(trigger) if resume else None
+        used = config.COACH_MODEL
         if sid:
-            rc, out, err = _run(cmd + ["--resume", sid], full_prompt, cwd=config.DATA_ROOT)
+            rc, out, err, used = _run_with_fallback(cmd + ["--resume", sid], full_prompt, config.DATA_ROOT, config.COACH_MODEL)
             if rc != 0:
                 log.warning("resume of %s failed (rc=%s): %s -- starting fresh", sid, rc, err[-500:])
                 reset_session()
                 sid = None
         if not sid:
-            rc, out, err = _run(cmd, full_prompt, cwd=config.DATA_ROOT)
+            rc, out, err, used = _run_with_fallback(cmd, full_prompt, config.DATA_ROOT, config.COACH_MODEL)
         data = _parse(out)
+        data["model_used"] = used
         _record("coach", trigger, data, rc)
         if rc != 0 or data.get("is_error"):
             log.error("coach run failed rc=%s stderr=%s stdout=%s", rc, err[-2000:], out[-2000:])
@@ -200,8 +250,9 @@ def run_builder(spec: str) -> Result:
         fcntl.flock(lock, fcntl.LOCK_EX)
         cmd = _base_cmd(config.CONTEXT / "builder.md", config.COACH_MODEL)
         cmd += ["--permission-mode", "acceptEdits", "--allowedTools", *BUILDER_ALLOWED]
-        rc, out, err = _run(cmd, prompt)
+        rc, out, err, used = _run_with_fallback(cmd, prompt, None, config.COACH_MODEL)
         data = _parse(out)
+        data["model_used"] = used
         _record("builder", "build", data, rc)
     if rc != 0 or data.get("is_error"):
         log.error("builder failed rc=%s stderr=%s", rc, err[-2000:])

@@ -46,6 +46,8 @@ HEALTH_WEBHOOK_TOKEN = env("HEALTH_WEBHOOK_TOKEN")
 HEALTH_WEBHOOK_PORT = int(env("HEALTH_WEBHOOK_PORT", "8787"))
 HEALTH_WEBHOOK_BIND = env("HEALTH_WEBHOOK_BIND", "0.0.0.0")
 COACH_MODEL = env("COACH_MODEL")
+# Tried in order when the main model is out of usage, rate limited, overloaded or unavailable.
+COACH_FALLBACK_MODELS = [m.strip() for m in (env("COACH_FALLBACK_MODELS", "opus,sonnet") or "").split(",") if m.strip()]
 COACH_TZ = env("COACH_TZ")  # None -> system local time
 MORNING_LOOKBACK_DAYS = int(env("MORNING_LOOKBACK_DAYS", "7"))
 
